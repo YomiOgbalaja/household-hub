@@ -45,8 +45,12 @@ function blankState() {
 }
 let state = load();
 function load() {
-  try { const raw = localStorage.getItem(STORE_KEY); if (raw) return normalize(JSON.parse(raw)); } catch (e) { /* storage unavailable */ }
-  return blankState();
+  let saved = null;
+  try { const raw = localStorage.getItem(STORE_KEY); if (raw) saved = JSON.parse(raw); } catch (e) { /* storage unavailable */ }
+  // a test build can ship starting data (window.HUB_SEED); it replaces an empty device or the Alex and Sam sample
+  const isSample = x => x && x.settings && x.settings.p1 === 'Alex' && x.settings.p2 === 'Sam';
+  if (window.HUB_SEED && (!saved || isSample(saved))) return normalize(JSON.parse(JSON.stringify(window.HUB_SEED)));
+  return saved ? normalize(saved) : blankState();
 }
 function normalize(s) {
   const b = blankState(), out = Object.assign(b, s);
