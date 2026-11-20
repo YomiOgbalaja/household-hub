@@ -223,7 +223,7 @@ function formNote(type, rec) {
 function changeCard(c) {
   const imp = changeImpact(c), by = c.by ? ` by ${esc(S()[c.by])}` : '';
   const sigs = ['p1', 'p2'].map(k => { const st = sigState(c, k), s = c.sig[k];
-    if (st === 'signed') return `<span class="sig on"><b>${esc(s.name)}</b> signed ${new Date(s.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>`;
+    if (st === 'signed') return `<span class="sig on"><b>${esc(s.name)}</b> signed ${new Date(s.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${s.email ? `<span class="small muted"> · signed in as ${esc(s.email)}</span>` : ''}</span>`;
     if (st === 'declined') return `<span class="pill s-bad">${esc(S()[k])} declined</span>`;
     return c.status === 'Pending' ? `<button class="btn sm primary" data-action="sign-change" data-id="${c.id}" data-who="${k}">Sign as ${esc(S()[k])}</button>` : `<span class="pill">${esc(S()[k])} did not sign</span>`; }).join('');
   const pillCls = { Pending: 's-warn', Signed: 's-good', Declined: 's-bad', Withdrawn: '' }[c.status];

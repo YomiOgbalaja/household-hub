@@ -13,6 +13,9 @@ A two-person household money app: bills, debts, payments, a 12-month plan, settl
 | `agree.js` | Miscellaneous costs and the two-signature responsibility agreement |
 | `grow.js` | Opportunities & investments: areas to cut, payoff plan, budget, growth projections, market rates |
 | `credit.js` | Credit scores, the factors behind them, and credit steps in the opportunities list |
+| `config.js` | The Supabase project URL and publishable key for sync. Blank means each device stands alone |
+| `sync.js` | Sync between phones: sign-in by emailed code, one shared household, offline queue, live updates |
+| `supabase/setup.sql` | The database tables and rules for sync. Setup steps in [SYNC.md](SYNC.md) |
 | `manifest.webmanifest`, `icon*.png`, `icon.svg` | Install to the home screen |
 | `sw.js` | Offline cache. Bump `VERSION` in it on every release so phones pick up the new files |
 
@@ -29,13 +32,15 @@ On a phone, open the site, then use Share → Add to Home Screen (iPhone) or Ins
 
 ## Where the data lives
 
-On each device, in the browser's local storage. Nothing is sent to any server, including the host.
+On each device, in the browser's local storage. Without sync, nothing is sent to any server, including the host. With sync set up ([SYNC.md](SYNC.md)), each phone still keeps a full copy and also shares it with the household's Supabase project, which only the two members can read.
 
 - **Export to Excel**: a full workbook with Summary, Bills, Debts, Payments, Plan, Settle Up, Actions, Decisions, Cash Flow, Accounts and Settings.
 - **Backup file (.json)**: an exact copy of everything.
 - **Import** accepts either of those, or the original Household Finance Hub workbook (the one-time migration).
 
-Because each device keeps its own copy, two people sharing one household should pick one device as the main one, or pass the export back and forth. Live sync between two phones needs a small backend with sign-in; `load()` and `save()` in `app.js` are the only two functions that touch storage, so that is where it would plug in.
+Without sync, each device keeps its own copy, so pick one device as the main one or pass the export back and forth.
+
+With sync, every bill, debt, payment, cost, change, score and log entry is its own record. A phone sends only what changed, edits to different records merge, and the later edit wins on the same record. The server checks signatures and approvals: each person signs and approves only for themselves, a signature is never removed, a change is Signed only with both signatures, and agreement history is never deleted.
 
 ## How the numbers work
 
