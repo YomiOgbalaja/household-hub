@@ -14,6 +14,7 @@ A two-person household money app: bills, debts, payments, a 12-month plan, settl
 | `grow.js` | Opportunities & investments: areas to cut, payoff plan, budget, growth projections, market rates |
 | `credit.js` | Credit scores, the factors behind them, and credit steps in the opportunities list |
 | `config.js` | The Supabase project URL and publishable key for sync. Blank means each device stands alone |
+| `install.js` | The Install prompt on Home and in Settings, with steps for iPhone and Safari |
 | `sync.js` | Sync between phones: sign-in by emailed code, one shared household, offline queue, live updates |
 | `supabase/setup.sql` | The database tables and rules for sync. Setup steps in [SYNC.md](SYNC.md) |
 | `manifest.webmanifest`, `icon*.png`, `icon.svg` | Install to the home screen |
