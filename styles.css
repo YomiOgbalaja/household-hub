@@ -209,3 +209,22 @@ table.diff td.to { color: var(--ink); font-weight: 600; }
 @media (max-width: 420px) { .quick { grid-template-columns: 1fr; } }
 table.diff td, table.diff th { white-space: normal; }
 table.diff td.to { min-width: 140px; }
+
+/* opportunities, credit */
+li.opp { align-items: flex-start; }
+li.opp .sub { margin-top: 2px; line-height: 1.45; }
+.ladder { list-style: none; padding: 0; margin: 0; counter-reset: l; }
+.ladder li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+.ladder li:last-child { border-bottom: 0; }
+.ladder .mark { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--soft); color: var(--muted); }
+.ladder li.ok { color: var(--ink); } .ladder li.ok .mark { background: var(--good-soft); color: var(--good); }
+.ladder li.next { color: var(--ink); font-weight: 600; } .ladder li.next .mark { background: var(--acc); color: #fff; }
+.score-head { display: flex; gap: 14px; align-items: center; margin: 8px 0 10px; }
+.score-num { font-size: 44px; font-weight: 750; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.scale { position: relative; display: flex; height: 10px; border-radius: 999px; overflow: visible; gap: 2px; }
+.scale span { display: block; height: 100%; border-radius: 3px; }
+.scale i { position: absolute; top: -4px; width: 4px; height: 18px; margin-left: -2px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 2px #fff; }
+input[type=range] { accent-color: var(--acc); }
+.scale-labels { position: relative; height: 16px; margin-top: 3px; }
+.scale-labels span { position: absolute; transform: translateX(-50%); }
+.scale-labels span:first-child { transform: none; } 

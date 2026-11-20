@@ -301,7 +301,7 @@ VIEWS.activity = () => header('Activity', 'Every change, approval and import on 
   `<div class="card"><ul class="list">${state.activity.slice(0, 200).map(a => `<li><div class="main"><div class="title">${esc(a.what)}</div><div class="sub">${esc(a.detail)}</div></div><div class="end small muted">${new Date(a.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}${a.who ? '<br>' + esc(who(a.who)) : ''}</div></li>`).join('') || '<li class="muted">Nothing yet.</li>'}</ul></div>`;
 
 VIEWS.more = () => header('More', '') + `<div class="more-grid">
-  <a href="#/me">My view<span>Per-paycheck lists</span></a><a href="#/pay">Payments<span>Log, approve, review</span></a>
+  <a href="#/grow">Opportunities &amp; investments<span>Cuts, payoff plan, credit, growth</span></a><a href="#/me">My view<span>Per-paycheck lists</span></a><a href="#/pay">Payments<span>Log, approve, review</span></a>
   <a href="#/misc">Misc costs<span>One-off and manual entries</span></a><a href="#/agree">Agreement<span>${state.changes.filter(c => c.status === 'Pending').length || 'No'} change${state.changes.filter(c => c.status === 'Pending').length === 1 ? '' : 's'} to sign</span></a>
   <a href="#/settle">Settle up<span>${esc(settleText(settleNow()))}</span></a><a href="#/notify">Reminders<span>Emails and calendar</span></a>
   <a href="#/debts">Debts<span>${money(totals().debt)}</span></a><a href="#/statements">Statements<span>Keep balances true</span></a>

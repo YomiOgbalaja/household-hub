@@ -57,7 +57,7 @@ function normalize(s) {
   out.settings = Object.assign(blankState().settings, s.settings || {});
   out.settings.emails = Object.assign({ p1: '', p2: '' }, out.settings.emails || {});
   out.settings.pay = { p1: Object.assign({ freq: 'semimonthly', next: null, amount: null }, (out.settings.pay || {}).p1), p2: Object.assign({ freq: 'semimonthly', next: null, amount: null }, (out.settings.pay || {}).p2) };
-  for (const k of ['bills', 'debts', 'payments', 'actions', 'decisions', 'cash', 'accounts', 'sources', 'statements', 'activity', 'misc', 'changes']) if (!Array.isArray(out[k])) out[k] = [];
+  for (const k of ['bills', 'debts', 'payments', 'actions', 'decisions', 'cash', 'accounts', 'sources', 'statements', 'activity', 'misc', 'changes', 'credit', 'snapshots']) if (!Array.isArray(out[k])) out[k] = [];
   if (!out.sent || typeof out.sent !== 'object') out.sent = {};
   return out;
 }
@@ -252,13 +252,13 @@ let route = 'home', ui = { meK: null, planMonth: null, planMode: 'month', billFi
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); }
 function go() {
   route = (location.hash.replace(/^#\/?/, '') || 'home').split('?')[0];
-  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === route || (a.dataset.nav === 'more' && ['pay', 'settle', 'bills', 'actions', 'decisions', 'cash', 'settings', 'more', 'debts', 'notify', 'statements', 'activity', 'misc', 'agree'].includes(route))));
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === route || (a.dataset.nav === 'more' && ['pay', 'settle', 'bills', 'actions', 'decisions', 'cash', 'settings', 'more', 'debts', 'notify', 'statements', 'activity', 'misc', 'agree', 'grow'].includes(route))));
   render();
 }
 function render() {
   const v = VIEWS[route] || VIEWS.home;
   $view.innerHTML = v();
-  const titles = { misc: 'Misc costs', agree: 'Agreement', me: 'My view', notify: 'Reminders', statements: 'Statements', activity: 'Activity', home: 'Home', plan: 'Plan', pay: 'Payments', settle: 'Settle up', bills: 'Bills', debts: 'Debts', actions: 'Actions', decisions: 'Decisions', cash: 'Cash flow', settings: 'Settings', more: 'More' };
+  const titles = { grow: 'Opportunities', misc: 'Misc costs', agree: 'Agreement', me: 'My view', notify: 'Reminders', statements: 'Statements', activity: 'Activity', home: 'Home', plan: 'Plan', pay: 'Payments', settle: 'Settle up', bills: 'Bills', debts: 'Debts', actions: 'Actions', decisions: 'Decisions', cash: 'Cash flow', settings: 'Settings', more: 'More' };
   document.title = `${titles[route] || 'Home'} · Household Hub`;
 }
 function rerender() { save(); render(); }
@@ -571,6 +571,7 @@ const FORMS = {
     ['type', 'Type', 'select', { opts: L(DEBT_TYPES), def: 'Credit card' }], ['owner', 'Owner', 'select', { opts: owners(), def: 'p1' }],
     ['share', `${S().p1} part if Shared (%)`, 'percent', {}], ['institution', 'Institution', 'text', {}], ['collector', 'Managed by / collector', 'text', {}],
     ['status', 'Status', 'select', { opts: L(DEBT_STATUS), def: 'Current' }], ['include', 'Count in totals', 'select', { opts: L(INCLUDE), def: 'Yes' }],
+    ['limit', 'Credit limit', 'money', { hint: 'Cards only: used for utilization in Credit score' }], ['opened', 'Opened', 'month', { hint: 'Helps track credit age' }],
     ['terms', 'Plan / terms', 'text', { full: 1 }],
     ['portal', 'Payment portal link', 'url', { full: 1, hint: "The lender or collector's own payment page" }],
     ['source', 'Usually paid with', 'select', { opts: sourceOpts() }], ['accountRef', 'Account reference', 'text', { hint: 'Last 4 digits or a nickname only' }],
@@ -783,9 +784,9 @@ async function exportXlsx() {
   add('Bills', ['Bill', 'Category', 'Payee', 'Owner', 'Partner 1 share', 'Amount', 'Frequency', 'Due day', 'First due date', 'Autopay', 'Pays from', 'Priority', 'Status', 'Past-due balance', 'Notes', 'Monthly equivalent', 'Next due', 'This month'],
     state.bills.map(b => { const it = billItem(b); return [b.name, b.category, b.payee, who(b.owner), P(b.share), $(b.amount), b.freq, b.dueDay, D(b.firstDue), b.autopay, b.payFrom, b.priority, b.status, $(b.pastDue), b.notes, $(billMonthly(b)), D(b.pending ? null : nextDue(it)), b.pending ? 'Awaiting signatures' : STATUS_TEXT[monthStatus(it, cm)]]; }),
     [30, 18, 18, 10, 9, 12, 12, 8, 12, 8, 12, 9, 10, 12, 44, 12, 12, 11]);
-  add('Debts', ['Debt', 'Type', 'Institution', 'Managed by', 'Owner', 'Partner 1 share', 'Balance', 'Balance as of', 'Plan APR', 'Monthly payment', 'Due day', 'Plan / terms', 'Status', 'Count in totals', 'Notes', 'Paid since', 'Balance today', 'Payoff months'],
-    state.debts.map(d => { const n = payoffMonths(d); return [d.name, d.type, d.institution, d.collector, who(d.owner), P(d.share), $(d.balance), D(d.asOf), P(d.apr), $(d.payment), d.dueDay, d.terms, d.status, d.include, d.notes, $(paidSince(d.id, debtFrom(d))), $(debtBalance(d)), n === Infinity ? 'Never' : n]; }),
-    [32, 13, 18, 22, 10, 9, 12, 12, 9, 12, 8, 24, 14, 9, 44, 12, 12, 10]);
+  add('Debts', ['Debt', 'Type', 'Institution', 'Managed by', 'Owner', 'Partner 1 share', 'Balance', 'Balance as of', 'Plan APR', 'Monthly payment', 'Due day', 'Plan / terms', 'Status', 'Count in totals', 'Notes', 'Paid since', 'Balance today', 'Payoff months', 'Credit limit', 'Opened'],
+    state.debts.map(d => { const n = payoffMonths(d); return [d.name, d.type, d.institution, d.collector, who(d.owner), P(d.share), $(d.balance), D(d.asOf), P(d.apr), $(d.payment), d.dueDay, d.terms, d.status, d.include, d.notes, $(paidSince(d.id, debtFrom(d))), $(debtBalance(d)), n === Infinity ? 'Never' : n, $(d.limit), d.opened]; }),
+    [32, 13, 18, 22, 10, 9, 12, 12, 9, 12, 8, 24, 14, 9, 44, 12, 12, 10, 12, 9]);
   add('Payments', ['Date', 'Item', 'Type', 'Paid by', 'Amount', 'Kind', 'Paid from', 'Confirmation', 'Notes', `${S().p1} approval`, `${S().p2} approval`, 'Status', 'Counted'],
     state.payments.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(p => { const it = itemById(p.itemId); const ap = v => v === true ? 'Yes' : v === false ? 'No' : '';
       return [D(p.date), p.itemKind === 'transfer' ? 'Transfer between partners' : (it ? it.name : p.itemName), p.itemKind, who(p.paidBy), $(p.amount), p.kind, p.method, p.conf, p.notes, ap((p.approvals || {}).p1), ap((p.approvals || {}).p2), payStatus(p), $(counted(p))]; }),
@@ -872,7 +873,7 @@ function importWorkbook(wb) {
   st.start = String(g('Plan start') || st.start); st.threshold = numV(g('Approval threshold')) ?? 250; st.window = numV(g('Due-soon window')) ?? 14;
   const ag = s.filter(r => String(r[0] || '').startsWith('Agreement')).map(r => r[1]); if (ag.length) out.agreements = ag;
   out.bills = J('Bills').filter(r => r.Bill).map(r => ({ id: uid(), name: str(r.Bill), category: str(r.Category), payee: str(r.Payee), owner: ownerKey(r.Owner), share: numV(r['Partner 1 share']), amount: numV(r.Amount), freq: str(r.Frequency) || 'Monthly', dueDay: numV(r['Due day']), firstDue: dateV(r['First due date']), autopay: str(r.Autopay), payFrom: str(r['Pays from']), priority: str(r.Priority), status: str(r.Status), pastDue: numV(r['Past-due balance']), notes: str(r.Notes) }));
-  out.debts = J('Debts').filter(r => r.Debt).map(r => ({ id: uid(), name: str(r.Debt), type: str(r.Type), institution: str(r.Institution), collector: str(r['Managed by']), owner: ownerKey(r.Owner), share: numV(r['Partner 1 share']), balance: numV(r.Balance), asOf: dateV(r['Balance as of']), apr: numV(r['Plan APR']), payment: numV(r['Monthly payment']), dueDay: numV(r['Due day']), terms: str(r['Plan / terms']), status: str(r.Status), include: str(r['Count in totals']) || 'Yes', notes: str(r.Notes) }));
+  out.debts = J('Debts').filter(r => r.Debt).map(r => ({ id: uid(), name: str(r.Debt), type: str(r.Type), institution: str(r.Institution), collector: str(r['Managed by']), owner: ownerKey(r.Owner), share: numV(r['Partner 1 share']), balance: numV(r.Balance), asOf: dateV(r['Balance as of']), apr: numV(r['Plan APR']), payment: numV(r['Monthly payment']), dueDay: numV(r['Due day']), terms: str(r['Plan / terms']), status: str(r.Status), include: str(r['Count in totals']) || 'Yes', notes: str(r.Notes), limit: numV(r['Credit limit']), opened: str(r.Opened) }));
   const byName = n => out.bills.find(b => b.name === n) || out.debts.find(d => d.name === n);
   const yn = v => v === 'Yes' ? true : v === 'No' ? false : null;
   out.payments = J('Payments').filter(r => r.Amount != null).map(r => { const it = byName(r.Item); const a1 = yn(r[`${p1} approval`]), a2 = yn(r[`${p2} approval`]);

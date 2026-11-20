@@ -11,6 +11,8 @@ A two-person household money app: bills, debts, payments, a 12-month plan, settl
 | `app.js` | Data, calculations, screens, forms, Excel and JSON import and export |
 | `more.js` | Pay schedules, per-paycheck emails, calendar files, My view, statements, activity |
 | `agree.js` | Miscellaneous costs and the two-signature responsibility agreement |
+| `grow.js` | Opportunities & investments: areas to cut, payoff plan, budget, growth projections, market rates |
+| `credit.js` | Credit scores, the factors behind them, and credit steps in the opportunities list |
 | `manifest.webmanifest`, `icon*.png`, `icon.svg` | Install to the home screen |
 | `sw.js` | Offline cache. Bump `VERSION` in it on every release so phones pick up the new files |
 
@@ -42,4 +44,6 @@ Because each device keeps its own copy, two people sharing one household should 
 - **Payments** count straight away unless they are not Scheduled and at or above the approval amount. Those need both partners to approve. A No from either partner means the payment never counts.
 - **Miscellaneous costs** are one-off or manual entries outside the bill list. They count in the plan, each person's share and settle up. Shared ones, or ones paid for the other person, at or above the approval amount need both approvals.
 - **Responsibility changes bind only when both sign.** Adding or removing a bill or debt, or changing its owner, share, amount, frequency or due day, the split, the shared default, the approval amount or the written agreements creates a proposal. Each partner signs by typing their name. Until both have signed, the current terms stay in force and the proposal is left out of every total. Either partner can decline, and the proposer can withdraw. The JSON backup keeps open proposals; the Excel export lists them on the Agreement tab.
+- **Opportunities & investments** runs rules over the live data (spending gap, IRS interest and penalty, high-rate cards, collections, past-due bills, vehicles, insurance, childcare, unclear charges, everyday spending, idle cash, missing data) and prices each one per month. Market rates are a dated snapshot with sources in `grow.js` (`MARKET`); the household can override any rate in the app. It is general education, not personalised advice.
+- **Credit score** reads payment history, utilization (from card limits), collections, credit age and new credit from the debts and bills, weighted as FICO publishes them.
 - **Settle up** compares each person's payments with their fair share of everything that was paid that month. Fair share follows the split: By owner, By income or 50/50. Joint payments count half each, and transfers between partners move the balance.

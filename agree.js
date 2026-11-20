@@ -341,4 +341,4 @@ document.addEventListener('click', e => {
 
 /* ---------- boot ---------- */
 Object.assign(window.hub, { gateSave, applyChange, proposeSettings, sampleState });
-go();
+// boot happens at the end of credit.js
