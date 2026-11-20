@@ -192,3 +192,20 @@ dialog#sheet::backdrop { background: rgba(17, 24, 39, .4); }
 .list .end .amt { white-space: nowrap; }
 a.chip { text-decoration: none; color: inherit; }
 a.chip.on { color: #fff; }
+
+/* agreement, signatures, misc */
+.change { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-top: 10px; background: #fff; }
+.change .title { font-weight: 650; }
+table.diff { width: 100%; margin-top: 8px; font-size: 13px; }
+table.diff th { text-align: left; }
+table.diff td { vertical-align: top; }
+table.diff td.from { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(107, 114, 128, .5); }
+table.diff td.to { color: var(--ink); font-weight: 600; }
+.sig { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--good); background: var(--good-soft); border-radius: 999px; padding: 3px 10px; }
+.sig b { font-family: "Snell Roundhand", "Segoe Script", "Brush Script MT", cursive; font-size: 15px; font-weight: 400; color: #14532d; }
+.quick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.quick .btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px; height: auto; text-align: left; white-space: normal; }
+.quick .btn span { font-size: 12px; color: var(--muted); font-weight: 400; }
+@media (max-width: 420px) { .quick { grid-template-columns: 1fr; } }
+table.diff td, table.diff th { white-space: normal; }
+table.diff td.to { min-width: 140px; }

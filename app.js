@@ -23,7 +23,8 @@ const DEFAULT_AGREEMENTS = [
   'Out-of-cycle or one-off payments at or above the approval amount need both of us to approve before they count.',
   'Settle up by the 5th: whoever the app shows owing makes a transfer and logs it.',
   'Money date on the first Sunday of each month: Home, Actions, then update debt balances from statements.',
-  'A new debt, a new recurring bill or a change of owner is logged as a decision and approved by both of us.',
+  'Every change of responsibility (a new or removed bill or debt, a change of owner, share, amount or due date, the split, or these agreements) stays pending until both of us sign it in the app. Until then the current terms stay binding.',
+  'Miscellaneous costs are logged the day they happen. Shared ones, or ones paid for the other person, at or above the approval amount need both of us to approve.',
   'Critical bills first (housing, cars, insurance, IRS), then arrears, then debt payoff priority.',
 ];
 
@@ -37,7 +38,7 @@ function blankState() {
       emails: { p1: '', p2: '' }, pay: { p1: { freq: 'semimonthly', next: null, amount: null }, p2: { freq: 'semimonthly', next: null, amount: null } },
       leadDays: 4, ccPartner: false, appUrl: '' },
     bills: [], debts: [], payments: [], actions: [], decisions: [], cash: [], accounts: [],
-    sources: [], statements: [], activity: [], sent: {},
+    sources: [], statements: [], activity: [], sent: {}, misc: [], changes: [], agreeVersion: 1,
     agreements: DEFAULT_AGREEMENTS.slice(),
     meta: { updated: null, exported: null },
   };
@@ -52,7 +53,7 @@ function normalize(s) {
   out.settings = Object.assign(blankState().settings, s.settings || {});
   out.settings.emails = Object.assign({ p1: '', p2: '' }, out.settings.emails || {});
   out.settings.pay = { p1: Object.assign({ freq: 'semimonthly', next: null, amount: null }, (out.settings.pay || {}).p1), p2: Object.assign({ freq: 'semimonthly', next: null, amount: null }, (out.settings.pay || {}).p2) };
-  for (const k of ['bills', 'debts', 'payments', 'actions', 'decisions', 'cash', 'accounts', 'sources', 'statements', 'activity']) if (!Array.isArray(out[k])) out[k] = [];
+  for (const k of ['bills', 'debts', 'payments', 'actions', 'decisions', 'cash', 'accounts', 'sources', 'statements', 'activity', 'misc', 'changes']) if (!Array.isArray(out[k])) out[k] = [];
   if (!out.sent || typeof out.sent !== 'object') out.sent = {};
   return out;
 }
@@ -97,7 +98,15 @@ function payStatus(p) {
   return a.p1 && a.p2 ? 'Counted' : 'Awaiting approval';
 }
 function counted(p) { return payStatus(p) === 'Counted' ? num(p.amount) : 0; }
-function paidFor(id, m) { let t = 0; for (const p of state.payments) if (p.itemId === id && ym(p.date) === m) t += counted(p); return t; }
+function paidFor(id, m) { let t = 0; for (const p of state.payments) if (p.itemId === id && ym(p.date) === m) t += counted(p); for (const x of state.misc) if (x.id === id && ym(x.date) === m) t += miscPaid(x); return t; }
+function miscNeedsBoth(x) { return num(x.amount) >= num(S().threshold) && (x.owner === 'shared' || (x.status === 'Paid' && x.paidBy !== x.owner)); }
+function miscStatus(x) {
+  const a = x.approvals || {};
+  if (a.p1 === false || a.p2 === false) return 'Declined';
+  if (!miscNeedsBoth(x)) return 'Counted';
+  return a.p1 && a.p2 ? 'Counted' : 'Awaiting approval';
+}
+function miscPaid(x) { return x.status === 'Paid' && miscStatus(x) === 'Counted' ? num(x.amount) : 0; }
 function paidSince(id, from) { let t = 0; for (const p of state.payments) if (p.itemId === id && p.date >= from) t += counted(p); return t; }
 
 function billAnchor(b) { return b.firstDue || dayOf(S().start, b.dueDay); }
@@ -121,10 +130,15 @@ function payoffMonths(d) {
   return Math.ceil(-Math.log(1 - r * bal / pay) / Math.log(1 + r));
 }
 
+function billItem(x) { return { kind: 'bill', id: x.id, name: x.name, owner: x.owner, share: x.share, amount: num(x.amount), ref: x, due: m => billDue(x, m), day: x.firstDue ? +x.firstDue.slice(8) : x.dueDay }; }
+function debtItem(x) { return { kind: 'debt', id: x.id, name: x.name, owner: x.owner, share: x.share, amount: num(x.payment), ref: x, due: m => debtDue(x, m), day: x.dueDay }; }
+function miscItem(x) { return { kind: 'misc', id: x.id, name: x.desc, owner: x.owner, share: x.share, amount: num(x.amount), ref: x, due: m => ym(x.date) === m ? num(x.amount) : 0, day: x.date ? +x.date.slice(8) : 1 }; }
 function items() {
-  const b = state.bills.map(x => ({ kind: 'bill', id: x.id, name: x.name, owner: x.owner, share: x.share, amount: num(x.amount), ref: x, due: m => billDue(x, m), day: x.firstDue ? +x.firstDue.slice(8) : x.dueDay }));
-  const d = state.debts.map(x => ({ kind: 'debt', id: x.id, name: x.name, owner: x.owner, share: x.share, amount: num(x.payment), ref: x, due: m => debtDue(x, m), day: x.dueDay }));
-  return b.concat(d);
+  // bills and debts awaiting both signatures are not binding yet, so they stay out of every total
+  const b = state.bills.filter(x => !x.pending).map(billItem);
+  const d = state.debts.filter(x => !x.pending).map(debtItem);
+  const c = state.misc.filter(x => x.desc && x.date && miscStatus(x) === 'Counted').map(miscItem);
+  return b.concat(d, c);
 }
 function itemById(id) { return items().find(i => i.id === id); }
 function nextDue(it) {
@@ -164,6 +178,11 @@ function settleRows() {
       if (p.itemKind === 'transfer') { if (p.paidBy === 'p1') t12 += v; else if (p.paidBy === 'p2') t21 += v; continue; }
       if (p.paidBy === 'p1') paid1 += v; else if (p.paidBy === 'p2') paid2 += v; else { paid1 += v / 2; paid2 += v / 2; }
     }
+    for (const x of state.misc) {
+      if (ym(x.date) !== m) continue;
+      const v = miscPaid(x);
+      if (x.paidBy === 'p1') paid1 += v; else if (x.paidBy === 'p2') paid2 += v; else { paid1 += v / 2; paid2 += v / 2; }
+    }
     const paid = paid1 + paid2, ratio = C ? fair1 / C : 0.5;
     const over = m > cur ? 0 : paid1 + t12 - t21 - paid * ratio;
     run += over;
@@ -195,12 +214,13 @@ function decisionOutcome(d) {
 }
 function totals() {
   const its = items(), cm = thisMonth();
-  const billsMo = state.bills.reduce((t, b) => t + billMonthly(b), 0);
-  const debtMo = state.debts.reduce((t, d) => t + (debtActive(d) ? num(d.payment) : 0), 0);
+  const live = a => a.filter(x => !x.pending);
+  const billsMo = live(state.bills).reduce((t, b) => t + billMonthly(b), 0);
+  const debtMo = live(state.debts).reduce((t, d) => t + (debtActive(d) ? num(d.payment) : 0), 0);
   let p1 = 0, p2 = 0;
-  for (const b of state.bills) { const v = billMonthly(b), s = shareP1(b.owner, b.share); p1 += v * s; p2 += v * (1 - s); }
-  for (const d of state.debts) { const v = debtActive(d) ? num(d.payment) : 0, s = shareP1(d.owner, d.share); p1 += v * s; p2 += v * (1 - s); }
-  const inc = state.debts.filter(d => d.include === 'Yes');
+  for (const b of live(state.bills)) { const v = billMonthly(b), s = shareP1(b.owner, b.share); p1 += v * s; p2 += v * (1 - s); }
+  for (const d of live(state.debts)) { const v = debtActive(d) ? num(d.payment) : 0, s = shareP1(d.owner, d.share); p1 += v * s; p2 += v * (1 - s); }
+  const inc = live(state.debts).filter(d => d.include === 'Yes');
   const debt = inc.reduce((t, d) => t + debtBalance(d), 0);
   const family = inc.filter(d => d.type === 'Family & friends').reduce((t, d) => t + debtBalance(d), 0);
   const paidOff = inc.reduce((t, d) => t + paidSince(d.id, debtFrom(d)), 0);
@@ -208,12 +228,13 @@ function totals() {
   let sched = 0, paid = 0, overdue = 0;
   for (const it of its) { const due = it.due(cm), pd = paidFor(it.id, cm); sched += due; paid += due ? Math.min(pd, due) : pd; if (monthStatus(it, cm) === 'missed') overdue++; }
   const arrears = state.bills.reduce((t, b) => t + num(b.pastDue), 0);
-  const awaiting = state.payments.filter(p => payStatus(p) === 'Awaiting approval').length;
+  const awaiting = state.payments.filter(p => payStatus(p) === 'Awaiting approval').length + state.misc.filter(x => miscStatus(x) === 'Awaiting approval').length;
+  const unsigned = state.changes.filter(c => c.status === 'Pending').length;
   const decAwait = state.decisions.filter(d => decisionOutcome(d).startsWith('Awaiting')).length;
   const flags = state.actions.map(actionFlag);
   const income = num(S().incomeP1) + num(S().incomeP2);
   const cashIn = state.cash.filter(c => c.dir === 'In' && ym(c.date) === cm).reduce((t, c) => t + num(c.amount), 0);
-  return { billsMo, debtMo, oblig: billsMo + debtMo, p1, p2, debt, family, paidOff, interest, sched, paid, overdue, arrears, awaiting, decAwait,
+  return { unsigned, billsMo, debtMo, oblig: billsMo + debtMo, p1, p2, debt, family, paidOff, interest, sched, paid, overdue, arrears, awaiting, decAwait,
     overdueActions: flags.filter(f => f === 'Overdue').length, soonActions: flags.filter(f => f === 'Due soon').length,
     openActions: flags.filter(f => f !== 'Done').length, checkCount: state.debts.filter(d => d.include === 'Check').length,
     behind: state.bills.filter(b => b.status === 'Behind').length, income: income || cashIn, incomeFromCash: !income && cashIn > 0 };
@@ -226,14 +247,14 @@ let route = 'home', ui = { meK: null, planMonth: null, planMode: 'month', billFi
 
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2600); }
 function go() {
-  route = (location.hash.replace(/^#\//, '') || 'home').split('?')[0];
-  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === route || (a.dataset.nav === 'more' && ['pay', 'settle', 'bills', 'actions', 'decisions', 'cash', 'settings', 'more', 'debts', 'notify', 'statements', 'activity'].includes(route))));
+  route = (location.hash.replace(/^#\/?/, '') || 'home').split('?')[0];
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === route || (a.dataset.nav === 'more' && ['pay', 'settle', 'bills', 'actions', 'decisions', 'cash', 'settings', 'more', 'debts', 'notify', 'statements', 'activity', 'misc', 'agree'].includes(route))));
   render();
 }
 function render() {
   const v = VIEWS[route] || VIEWS.home;
   $view.innerHTML = v();
-  const titles = { me: 'My view', notify: 'Reminders', statements: 'Statements', activity: 'Activity', home: 'Home', plan: 'Plan', pay: 'Payments', settle: 'Settle up', bills: 'Bills', debts: 'Debts', actions: 'Actions', decisions: 'Decisions', cash: 'Cash flow', settings: 'Settings', more: 'More' };
+  const titles = { misc: 'Misc costs', agree: 'Agreement', me: 'My view', notify: 'Reminders', statements: 'Statements', activity: 'Activity', home: 'Home', plan: 'Plan', pay: 'Payments', settle: 'Settle up', bills: 'Bills', debts: 'Debts', actions: 'Actions', decisions: 'Decisions', cash: 'Cash flow', settings: 'Settings', more: 'More' };
   document.title = `${titles[route] || 'Home'} · Household Hub`;
 }
 function rerender() { save(); render(); }
@@ -248,7 +269,8 @@ function emptyStart() {
     <p>Start by bringing in your Household Finance Hub workbook, or add your names, bills and debts by hand.</p>
     <div class="row" style="justify-content:center;margin-top:12px">
       <button class="btn primary" data-action="import">Import workbook or backup</button>
-      <a class="btn" href="#/settings">Set names</a><button class="btn" data-action="new-bill">Add a bill</button></div></div>`;
+      <a class="btn" href="#/settings">Set names</a><button class="btn" data-action="new-bill">Add a bill</button></div>
+    <p class="small muted" style="margin-top:14px">Just looking? <button class="btn sm ghost" data-action="sample">Try it with sample data</button></p></div>`;
 }
 const VIEWS = {};
 
@@ -261,7 +283,8 @@ VIEWS.home = () => {
   const share = t.p1 + t.p2 ? t.p1 / (t.p1 + t.p2) : 0.5;
   const attention = [];
   if (t.overdue) attention.push(`<li class="tap" data-go="plan"><span class="dot bad"></span><div class="main"><div class="title">${t.overdue} item${t.overdue > 1 ? 's' : ''} overdue this month</div><div class="sub">Open the plan to log or chase them</div></div></li>`);
-  if (t.awaiting) attention.push(`<li class="tap" data-go="pay"><span class="dot warn"></span><div class="main"><div class="title">${t.awaiting} payment${t.awaiting > 1 ? 's' : ''} waiting for approval</div><div class="sub">Out-of-cycle payments of ${money(S().threshold)} or more need both of you</div></div></li>`);
+  if (t.unsigned) attention.push(`<li class="tap" data-go="agree"><span class="dot bad"></span><div class="main"><div class="title">${t.unsigned} change${t.unsigned > 1 ? 's' : ''} waiting for both signatures</div><div class="sub">The current terms stay binding until both of you sign</div></div></li>`);
+  if (t.awaiting) attention.push(`<li class="tap" data-go="${state.payments.some(p => payStatus(p) === 'Awaiting approval') ? 'pay' : 'misc'}"><span class="dot warn"></span><div class="main"><div class="title">${t.awaiting} payment${t.awaiting > 1 ? 's' : ''} waiting for approval</div><div class="sub">Payments and shared costs of ${money(S().threshold)} or more need both of you</div></div></li>`);
   if (t.overdueActions || t.soonActions) attention.push(`<li class="tap" data-go="actions"><span class="dot ${t.overdueActions ? 'bad' : 'warn'}"></span><div class="main"><div class="title">${t.overdueActions} action${t.overdueActions === 1 ? '' : 's'} overdue, ${t.soonActions} due soon</div><div class="sub">${t.openActions} open in total</div></div></li>`);
   if (t.decAwait) attention.push(`<li class="tap" data-go="decisions"><span class="dot warn"></span><div class="main"><div class="title">${t.decAwait} decision${t.decAwait > 1 ? 's' : ''} need a yes or no</div></div></li>`);
   if (t.arrears) attention.push(`<li class="tap" data-go="bills"><span class="dot bad"></span><div class="main"><div class="title">${money(t.arrears)} in past-due bills</div><div class="sub">${t.behind} bill${t.behind === 1 ? '' : 's'} marked Behind</div></div></li>`);
@@ -342,6 +365,7 @@ VIEWS.plan = () => {
       `<div class="card"><div class="tablewrap"><table><thead><tr><th>Item</th>${ms.map(mm => `<th${mm === cm ? ' style="color:var(--acc)"' : ''}>${monthName(mm)}</th>`).join('')}</tr></thead>
       <tbody><tr><td colspan="13" style="font-weight:700;color:var(--acc)">Bills</td></tr>${rowsFor(its.filter(i => i.kind === 'bill'))}
       <tr><td colspan="13" style="font-weight:700;color:var(--acc)">Debt payments</td></tr>${rowsFor(its.filter(i => i.kind === 'debt' && i.amount))}
+      ${its.some(i => i.kind === 'misc') ? `<tr><td colspan="13" style="font-weight:700;color:var(--acc)">Miscellaneous</td></tr>${rowsFor(its.filter(i => i.kind === 'misc'))}` : ''}
       <tr class="total"><td>Scheduled</td>${sch.map(v => `<td>${money(v)}</td>`).join('')}</tr><tr class="total"><td>Paid</td>${tot.map(v => `<td>${money(v)}</td>`).join('')}</tr></tbody></table></div>
       <div class="legend"><span><span class="sw" style="background:var(--good-soft)"></span>Paid</span><span><span class="sw" style="background:var(--warn-soft)"></span>Partial</span><span><span class="sw" style="background:var(--bad-soft)"></span>Overdue</span><span><span class="sw" style="background:var(--due-soft)"></span>Due now</span><span><span class="sw" style="background:var(--soft)"></span>Upcoming</span></div></div>`;
   }
@@ -359,7 +383,8 @@ VIEWS.plan = () => {
     <div class="grid g4" style="margin-bottom:12px">${kpi('Scheduled', money(sched), monthName(m, true), '')}${kpi('Paid', money(paid), `${sched ? pct(paid / sched) : '–'} done${extra > 0.5 ? ` · plus ${money(extra)} extra` : ''}`, 't-good', sched ? paid / sched : 0)}
     ${kpi('Still to pay', money(Math.max(0, sched - paid)), `${rows.filter(r => r.st === 'missed').length} overdue`, 't-bad')}${kpi('Items', String(rows.length), `${rows.filter(r => r.st === 'paid').length} paid`, '')}</div>
     <div class="cols"><div class="card"><h2>Bills</h2><ul class="list">${rows.filter(r => r.it.kind === 'bill').map(li).join('') || '<li class="muted">None this month</li>'}</ul></div>
-    <div class="card"><h2>Debt payments</h2><ul class="list">${rows.filter(r => r.it.kind === 'debt').map(li).join('') || '<li class="muted">None this month</li>'}</ul></div></div>`;
+    <div class="card"><h2>Debt payments</h2><ul class="list">${rows.filter(r => r.it.kind === 'debt').map(li).join('') || '<li class="muted">None this month</li>'}</ul></div></div>
+    <div class="card" style="margin-top:16px"><div class="spread"><h2>Miscellaneous costs</h2><button class="btn sm" data-action="new-misc">Add a cost</button></div><ul class="list">${rows.filter(r => r.it.kind === 'misc').map(li).join('') || '<li class="muted">None this month</li>'}</ul></div>`;
 };
 
 VIEWS.pay = () => {
@@ -410,10 +435,10 @@ VIEWS.bills = () => {
     `<div class="row" style="margin-bottom:12px"><div class="chips">${['all', 'p1', 'p2', 'shared'].map(k => `<button class="chip ${ui.billFilter === k ? 'on' : ''}" data-action="bill-filter" data-v="${k}">${k === 'all' ? 'All' : esc(who(k))}</button>`).join('')}</div>
      <input class="search" style="flex:1;min-width:180px" type="search" placeholder="Search bills" value="${esc(ui.billQ)}" data-input="billQ"></div>
     ${byCat.map(([c, bs]) => `<div class="card"><div class="spread"><h2>${esc(c)}</h2><span class="muted small num">${money(bs.reduce((t, b) => t + billMonthly(b), 0))}/mo</span></div><ul class="list">${bs.map(b => {
-      const it = items().find(i => i.id === b.id), st = monthStatus(it, cm), nd = nextDue(it);
+      const it = billItem(b), st = b.pending ? 'none' : monthStatus(it, cm), nd = b.pending ? null : nextDue(it);
       return `<li class="tap" data-action="edit-bill" data-id="${b.id}"><span class="dot ${DOT_CLS[st] || ''}"></span><div class="main"><div class="title">${esc(b.name)}</div>
         <div class="sub">${esc(b.freq || 'Monthly')}${nd ? ' · next ' + dateShort(nd) : ''}${b.payee ? ' · ' + esc(b.payee) : ''}</div>
-        <div class="row" style="margin-top:4px">${ownerPill(b.owner)}${b.status && b.status !== 'Current' ? `<span class="pill ${b.status === 'Behind' ? 's-bad' : 's-warn'}">${esc(b.status)}</span>` : ''}${num(b.pastDue) ? `<span class="pill s-bad">${money(b.pastDue)} past due</span>` : ''}${b.priority === 'Critical' ? '<span class="pill s-bad">Critical</span>' : ''}</div></div>
+        <div class="row" style="margin-top:4px">${ownerPill(b.owner)}${b.status && b.status !== 'Current' ? `<span class="pill ${b.status === 'Behind' ? 's-bad' : 's-warn'}">${esc(b.status)}</span>` : ''}${num(b.pastDue) ? `<span class="pill s-bad">${money(b.pastDue)} past due</span>` : ''}${b.priority === 'Critical' ? '<span class="pill s-bad">Critical</span>' : ''}${govPill(b.id)}</div></div>
         <div class="end"><div class="amt">${money(b.amount, true)}</div><span class="pill ${STATUS_CLS[st]}">${STATUS_TEXT[st]}</span></div></li>`;
     }).join('')}</ul></div>`).join('') || '<div class="card empty">No bills match.</div>'}`;
 };
@@ -421,7 +446,7 @@ VIEWS.bills = () => {
 VIEWS.debts = () => {
   let list = state.debts.slice();
   if (ui.debtFilter !== 'all') list = list.filter(d => ui.debtFilter === 'check' ? d.include === 'Check' : d.type === ui.debtFilter);
-  const inc = state.debts.filter(d => d.include === 'Yes');
+  const inc = state.debts.filter(d => d.include === 'Yes' && !d.pending);
   const rank = inc.filter(d => debtBalance(d) > 0 && d.status !== 'Paid off').sort((a, b) => num(b.apr) - num(a.apr) || debtBalance(a) - debtBalance(b));
   const pr = id => { const i = rank.findIndex(d => d.id === id); return i < 0 ? 999 : i + 1; };
   const sorters = { priority: (a, b) => pr(a.id) - pr(b.id), balance: (a, b) => debtBalance(b) - debtBalance(a), rate: (a, b) => num(b.apr) - num(a.apr), name: (a, b) => a.name.localeCompare(b.name) };
@@ -439,7 +464,7 @@ VIEWS.debts = () => {
       return `<li class="tap" data-action="edit-debt" data-id="${d.id}"><div class="main"><div class="spread"><span class="title">${esc(d.name)}</span><span class="amt">${money(bal, true)}</span></div>
         <div class="sub">${esc(d.type || '')}${d.collector && d.collector !== d.institution ? ' · ' + esc(d.collector) : ''}${num(d.payment) ? ' · ' + money(d.payment) + '/mo' : ''}${d.apr != null && d.apr !== '' ? ' · ' + (num(d.apr) * 100).toFixed(2).replace(/\.00$/, '') + '%' : ''}${n ? ' · ' + (n === Infinity ? 'payment below interest' : 'paid off ' + monthName(addMonths(thisMonth(), n), true)) : ''}</div>
         <div class="bar" style="margin:6px 0"><i style="width:${paid * 100}%;background:var(--good)"></i></div>
-        <div class="row">${ownerPill(d.owner)}${d.status ? `<span class="pill ${stCls}">${esc(d.status)}</span>` : ''}${d.include === 'Check' ? '<span class="pill s-warn">Confirm: not counted</span>' : d.include === 'No' ? '<span class="pill">Not counted</span>' : ''}${p <= 3 ? `<span class="pill s-acc">Priority ${p}</span>` : ''}${d.terms ? `<span class="pill">${esc(d.terms)}</span>` : ''}</div></div></li>`;
+        <div class="row">${ownerPill(d.owner)}${d.status ? `<span class="pill ${stCls}">${esc(d.status)}</span>` : ''}${d.include === 'Check' ? '<span class="pill s-warn">Confirm: not counted</span>' : d.include === 'No' ? '<span class="pill">Not counted</span>' : ''}${p <= 3 ? `<span class="pill s-acc">Priority ${p}</span>` : ''}${govPill(d.id)}${d.terms ? `<span class="pill">${esc(d.terms)}</span>` : ''}</div></div></li>`;
     }).join('') || '<li class="muted">No debts here.</li>'}</ul></div>`;
 };
 
@@ -570,7 +595,7 @@ function itemOptions(sel) {
   return `<option value="">Choose…</option><option value="transfer" ${sel === 'transfer' ? 'selected' : ''}>Transfer between you (settle up)</option>${g('Bills', its.filter(i => i.kind === 'bill'))}${g('Debts', its.filter(i => i.kind === 'debt'))}`;
 }
 function openForm(type, id, prefill = {}) {
-  const F = FORMS[type], rec = id ? state[F.coll].find(r => r.id === id) : null, v = Object.assign({}, rec || {}, prefill);
+  const F = FORMS[type], rec = id ? state[F.coll].find(r => r.id === id) : null, v = Object.assign({}, rec || {}, rec ? proposedFor(rec.id) : {}, prefill);
   if (type === 'payment' && v.itemKind === 'transfer') v.itemId = 'transfer';
   const fields = F.fields().map(([k, label, t, o]) => {
     let val = v[k] ?? (rec ? '' : o.def ?? '');
@@ -583,10 +608,11 @@ function openForm(type, id, prefill = {}) {
     return `<div class="field ${o.full ? 'full' : ''}"><label>${esc(label)}</label>${input}${o.hint ? `<span class="hint">${esc(o.hint)}</span>` : ''}</div>`;
   }).join('');
   $sheet.innerHTML = `<form method="dialog" data-form="${type}" data-id="${id || ''}"><div class="sheet-head"><h2>${rec ? 'Edit' : 'New'} ${esc(F.title.toLowerCase())}</h2></div>
-    <div class="sheet-body"><div class="fields">${fields}</div>${type === 'payment' ? `<p class="small muted" id="pay-rule"></p>` : ''}</div>
+    <div class="sheet-body">${formNote(type, rec)}<div class="fields">${fields}</div>${type === 'payment' || type === 'misc' ? `<p class="small muted" id="pay-rule"></p>` : ''}</div>
     <div class="sheet-foot">${rec ? `<button type="button" class="btn danger grow" data-action="delete" data-type="${type}" data-id="${id}">Delete</button>` : ''}
     <button type="button" class="btn" data-action="close">Cancel</button><button type="submit" class="btn primary">Save</button></div></form>`;
-  $sheet.showModal();
+  if (!$sheet.open) $sheet.showModal();
+  if (type === 'misc') { const f = $sheet.querySelector('form'); const upd = () => miscRule(f); f.addEventListener('input', upd); f.addEventListener('change', upd); upd(); }
   if (type === 'payment') { const f = $sheet.querySelector('form'); const upd = () => payRule(f); f.addEventListener('input', upd); f.addEventListener('change', e => { if (e.target.name === 'itemId') fillPayment(f); upd(); }); upd(); }
 }
 function fillPayment(f) {
@@ -606,7 +632,7 @@ function submitForm(form) {
   const type = form.dataset.form, F = FORMS[type], id = form.dataset.id;
   const err = validateForm(type, form);
   if (err) return toast(err);
-  const rec = id ? state[F.coll].find(r => r.id === id) : { id: uid() };
+  const rec = id ? state[F.coll].find(r => r.id === id) : { id: uid() }, vals = {};
   for (const [k, , t] of F.fields()) {
     const el = form.elements[k]; if (!el) continue;
     let v = el.value.trim();
@@ -614,8 +640,9 @@ function submitForm(form) {
     else if (t === 'int') v = v === '' ? null : Math.round(num(v));
     else if (t === 'percent') v = v === '' ? null : num(v) / 100;
     else if (v === '') v = null;
-    rec[k] = v;
+    vals[k] = v;
   }
+  const note = gateSave(type, rec, vals, !id);
   if (type === 'payment') {
     if (rec.itemId === 'transfer') { rec.itemKind = 'transfer'; rec.itemId = null; } else { const it = itemById(rec.itemId); rec.itemKind = it ? it.kind : 'bill'; rec.itemName = it ? it.name : rec.itemName; }
     rec.approvals = rec.approvals || {};
@@ -623,7 +650,7 @@ function submitForm(form) {
   }
   if (!id) state[F.coll].push(rec);
   afterSave(type, rec, !id);
-  $sheet.close(); rerender(); toast(`${F.title} saved`);
+  $sheet.close(); rerender(); toast(note || `${F.title} saved`);
 }
 
 /* ---------------- events ---------------- */
@@ -631,7 +658,7 @@ document.addEventListener('click', e => {
   const goEl = e.target.closest('[data-go]'); if (goEl) { location.hash = '#/' + goEl.dataset.go; return; }
   const a = e.target.closest('[data-action]'); if (!a) return;
   const act = a.dataset.action, id = a.dataset.id;
-  if (a.tagName === 'A') e.preventDefault();
+  if (a.tagName === 'A' && act !== 'portal') e.preventDefault();
   const find = (coll) => state[coll].find(r => r.id === id);
   switch (act) {
     case 'new-payment': return openForm('payment', null);
@@ -650,12 +677,15 @@ document.addEventListener('click', e => {
     case 'edit-account': return openForm('account', id);
     case 'close': return $sheet.close();
     case 'delete': {
-      const F = FORMS[a.dataset.type];
-      if (!confirm(`Delete this ${F.title.toLowerCase()}? This cannot be undone.`)) return;
-      const gone = state[F.coll].find(r => r.id === id); state[F.coll] = state[F.coll].filter(r => r.id !== id); logAct(`Deleted ${F.title.toLowerCase()}`, recLabel(a.dataset.type, gone)); $sheet.close(); rerender(); return toast('Deleted');
+      const type = a.dataset.type, F = FORMS[type], gone = state[F.coll].find(r => r.id === id);
+      if (gateDelete(type, gone)) return;
+      return ask(`Delete this ${F.title.toLowerCase()}?`, 'This cannot be undone.', 'Delete', () => {
+        state[F.coll] = state[F.coll].filter(r => r.id !== id); dropChangesFor(id); logAct(`Deleted ${F.title.toLowerCase()}`, recLabel(type, gone)); rerender(); toast('Deleted');
+      }, true);
     }
     case 'mark-paid': {
       const it = itemById(id), m = a.dataset.month || thisMonth();
+      if (it.kind === 'misc') return openForm('misc', id, { status: 'Paid', paidBy: it.ref.paidBy || S().me || (it.owner === 'shared' ? 'joint' : it.owner) });
       const left = Math.max(0, it.due(m) - paidFor(id, m));
       const date = m === thisMonth() ? todayISO() : dayOf(m, it.day || 1);
       const by = it.owner === 'shared' ? (S().me || 'joint') : it.owner;
@@ -672,12 +702,12 @@ document.addEventListener('click', e => {
     case 'debt-filter': ui.debtFilter = a.dataset.v; return render();
     case 'act-tab': ui.actTab = a.dataset.v; return render();
     case 'cash-month': ui.cashMonth = a.dataset.v; return render();
-    case 'set-split': S().split = a.dataset.v; logAct('Changed split', SPLITS[a.dataset.v]); return rerender();
+    case 'set-split': return proposeSettings({ split: a.dataset.v });
     case 'edit-agreements': return editAgreements();
     case 'export-xlsx': return exportXlsx().catch(err => toast('Export failed: ' + err.message));
     case 'export-json': return exportJson();
     case 'import': return document.getElementById('file').click();
-    case 'reset': if (confirm('Erase all data on this device? Export first if you want a copy. This cannot be undone.')) { state = blankState(); rerender(); toast('Erased'); } return;
+    case 'reset': return ask('Erase all data on this device?', 'Export first if you want a copy. This cannot be undone.', 'Erase', () => { state = blankState(); rerender(); toast('Erased'); }, true);
   }
 });
 document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (f) { e.preventDefault(); submitForm(f); } });
@@ -694,16 +724,24 @@ document.addEventListener('change', e => {
     if (s === 'defShare') v = num(v) / 100;
     if ((s === 'p1' || s === 'p2') && !v.trim()) v = s === 'p1' ? 'Partner 1' : 'Partner 2';
     if (s === 'start' && !/^\d{4}-\d{2}$/.test(v)) return;
+    if (isGoverned(s)) return proposeSettings({ [s]: v });
     S()[s] = v; ui.planMonth = null; save(); toast('Saved');
     if (['p1', 'p2', 'split'].includes(s)) render();
   }
 });
 $sheet.addEventListener('click', e => { if (e.target === $sheet) $sheet.close(); });
+function ask(title, detail, yes, fn, danger) {
+  $sheet.innerHTML = `<div><div class="sheet-head"><h2>${esc(title)}</h2>${detail ? `<p class="small muted" style="margin:4px 0 0">${esc(detail)}</p>` : ''}</div>
+    <div class="sheet-foot"><button type="button" class="btn grow" data-action="close">Cancel</button><button type="button" class="btn ${danger ? 'danger' : 'primary'}" id="ask-yes">${esc(yes)}</button></div></div>`;
+  if (!$sheet.open) $sheet.showModal();
+  $sheet.querySelector('#ask-yes').addEventListener('click', () => { $sheet.close(); fn(); });
+}
+const inFrame = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 function editAgreements() {
-  $sheet.innerHTML = `<form method="dialog" id="agf"><div class="sheet-head"><h2>Our agreements</h2></div><div class="sheet-body"><div class="field full"><label>One per line</label><textarea name="t" style="min-height:220px">${esc(state.agreements.join('\n'))}</textarea></div></div>
-    <div class="sheet-foot"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn primary">Save</button></div></form>`;
-  $sheet.showModal();
-  $sheet.querySelector('#agf').addEventListener('submit', ev => { ev.preventDefault(); state.agreements = ev.target.t.value.split('\n').map(x => x.trim()).filter(Boolean); $sheet.close(); rerender(); });
+  $sheet.innerHTML = `<form method="dialog" id="agf"><div class="sheet-head"><h2>Our agreements</h2><p class="small muted" style="margin:4px 0 0">Changes take effect once both of you sign them.</p></div><div class="sheet-body"><div class="field full"><label>One per line</label><textarea name="t" style="min-height:220px">${esc(state.agreements.join('\n'))}</textarea></div></div>
+    <div class="sheet-foot"><button type="button" class="btn" data-action="close">Cancel</button><button class="btn primary">Propose</button></div></form>`;
+  if (!$sheet.open) $sheet.showModal();
+  $sheet.querySelector('#agf').addEventListener('submit', ev => { ev.preventDefault(); const list = ev.target.t.value.split('\n').map(x => x.trim()).filter(Boolean); $sheet.close(); proposeAgreements(list); });
 }
 
 /* ---------------- import / export ---------------- */
@@ -711,7 +749,7 @@ function loadXlsx() {
   if (window.XLSX) return Promise.resolve(window.XLSX);
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = XLSX_URL; s.onload = () => res(window.XLSX); s.onerror = () => rej(new Error('Could not load the Excel library. Check your connection.')); document.head.appendChild(s); });
 }
-function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+function download(blob, name) { if (inFrame) toast('Downloads are switched off in the test link. They work in the hosted app.'); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
 function exportJson() {
   download(new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), `household-hub-backup-${todayISO()}.json`);
   state.meta.exported = new Date().toISOString(); save(); render(); toast('Backup downloaded');
@@ -719,6 +757,7 @@ function exportJson() {
 const isoToSerial = iso => iso ? Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 864e5 + 25569) : null;
 const serialToIso = n => { const d = new Date(Math.round((n - 25569) * 864e5)); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
 async function exportXlsx() {
+  if (inFrame) return toast('Downloads are switched off in the test link. Export works in the hosted app.');
   const X = await loadXlsx();
   const wb = X.utils.book_new();
   const D = iso => iso ? { t: 'n', v: isoToSerial(iso), z: 'yyyy-mm-dd' } : null;
@@ -738,7 +777,7 @@ async function exportXlsx() {
     ['Settle up', settleText(settleNow())], ['Split method', SPLITS[S().split]], ['Payments awaiting approval', t.awaiting], ['Open actions', t.openActions],
   ], [34, 30]);
   add('Bills', ['Bill', 'Category', 'Payee', 'Owner', 'Partner 1 share', 'Amount', 'Frequency', 'Due day', 'First due date', 'Autopay', 'Pays from', 'Priority', 'Status', 'Past-due balance', 'Notes', 'Monthly equivalent', 'Next due', 'This month'],
-    state.bills.map(b => { const it = itemById(b.id); return [b.name, b.category, b.payee, who(b.owner), P(b.share), $(b.amount), b.freq, b.dueDay, D(b.firstDue), b.autopay, b.payFrom, b.priority, b.status, $(b.pastDue), b.notes, $(billMonthly(b)), D(nextDue(it)), STATUS_TEXT[monthStatus(it, cm)]]; }),
+    state.bills.map(b => { const it = billItem(b); return [b.name, b.category, b.payee, who(b.owner), P(b.share), $(b.amount), b.freq, b.dueDay, D(b.firstDue), b.autopay, b.payFrom, b.priority, b.status, $(b.pastDue), b.notes, $(billMonthly(b)), D(b.pending ? null : nextDue(it)), b.pending ? 'Awaiting signatures' : STATUS_TEXT[monthStatus(it, cm)]]; }),
     [30, 18, 18, 10, 9, 12, 12, 8, 12, 8, 12, 9, 10, 12, 44, 12, 12, 11]);
   add('Debts', ['Debt', 'Type', 'Institution', 'Managed by', 'Owner', 'Partner 1 share', 'Balance', 'Balance as of', 'Plan APR', 'Monthly payment', 'Due day', 'Plan / terms', 'Status', 'Count in totals', 'Notes', 'Paid since', 'Balance today', 'Payoff months'],
     state.debts.map(d => { const n = payoffMonths(d); return [d.name, d.type, d.institution, d.collector, who(d.owner), P(d.share), $(d.balance), D(d.asOf), P(d.apr), $(d.payment), d.dueDay, d.terms, d.status, d.include, d.notes, $(paidSince(d.id, debtFrom(d))), $(debtBalance(d)), n === Infinity ? 'Never' : n]; }),
@@ -775,9 +814,9 @@ document.getElementById('file').addEventListener('change', async e => {
     let next;
     if (/\.json$/i.test(f.name)) next = normalize(JSON.parse(await f.text()));
     else next = importWorkbook((await loadXlsx()).read(await f.arrayBuffer(), { type: 'array' }));
-    if (state.bills.length + state.debts.length + state.payments.length && !confirm(`Replace the data on this device with "${f.name}"?`)) return;
-    state = next; ui.planMonth = null; logAct('Imported data', f.name); rerender();
-    toast(`Imported ${state.bills.length} bills, ${state.debts.length} debts, ${state.payments.length} payments`);
+    const apply = () => { state = next; ui.planMonth = null; logAct('Imported data', f.name); rerender(); toast(`Imported ${state.bills.length} bills, ${state.debts.length} debts, ${state.payments.length} payments`); };
+    if (state.bills.length + state.debts.length + state.payments.length) ask(`Replace the data on this device with "${f.name}"?`, 'Export first if you want to keep what is here.', 'Replace', apply, true);
+    else apply();
   } catch (err) { console.error(err); toast('Could not read that file: ' + err.message); }
 });
 

@@ -101,7 +101,7 @@ function overdueBefore(k, start) {
     const sh = myShare(it, k); if (sh <= 0 || !it.name) continue;
     if (monthStatus(it, cm) === 'missed' && dayOf(cm, it.day || 1) < start) res.push({ it, date: dayOf(cm, it.day || 1), left: Math.max(0, it.due(cm) - paidFor(it.id, cm)) * sh, share: sh });
   }
-  const arrears = state.bills.filter(b => num(b.pastDue) > 0 && myShare(itemById(b.id), k) > 0).map(b => ({ name: b.name, amt: num(b.pastDue) * myShare(itemById(b.id), k) }));
+  const arrears = state.bills.filter(b => !b.pending && num(b.pastDue) > 0 && myShare(itemById(b.id), k) > 0).map(b => ({ name: b.name, amt: num(b.pastDue) * myShare(itemById(b.id), k) }));
   return { list: res, arrears };
 }
 function carryOf(k) { const t = totals(); return k === 'p1' ? t.p1 : t.p2; }
@@ -145,6 +145,10 @@ function monthEndEmail(m) {
   L_.push(`Payments confirmed (${counted_.length}):`);
   counted_.forEach(p => L_.push(`• ${dateShort(p.date)}: ${name(p)}, ${money(p.amount, true)}, paid by ${who(p.paidBy)}${p.conf ? `, confirmation ${p.conf}` : ''}`));
   if (!counted_.length) L_.push('• None logged');
+  const misc = state.misc.filter(x => ym(x.date) === m && x.status === 'Paid' && miscStatus(x) === 'Counted');
+  if (misc.length) { L_.push('', `Miscellaneous costs (${misc.length}, ${money(misc.reduce((t, x) => t + num(x.amount), 0), true)}):`); misc.forEach(x => L_.push(`• ${dateShort(x.date)}: ${x.desc}, ${money(x.amount, true)}, paid by ${who(x.paidBy)}, carried by ${who(x.owner)}`)); }
+  const unsigned = state.changes.filter(c => c.status === 'Pending');
+  if (unsigned.length) { L_.push('', `Changes waiting for both signatures (${unsigned.length}). The current terms stay binding until you both sign:`); unsigned.forEach(c => L_.push(`• ${changeTitle(c)}`)); }
   if (unpaid.length) { L_.push('', `Still unpaid (${unpaid.length}):`); unpaid.forEach(r => L_.push(`• ${r.it.name}, ${money(r.due - r.paid, true)} (${who(r.it.owner)})`)); }
   if (waiting.length) { L_.push('', `Waiting for both approvals (${waiting.length}):`); waiting.forEach(p => L_.push(`• ${name(p)}, ${money(p.amount, true)}`)); }
   if (sr) L_.push('', `Fair shares this month: ${S().p1} ${money(sr.fair1)}, ${S().p2} ${money(sr.fair2)}. Paid: ${S().p1} ${money(sr.paid1)}, ${S().p2} ${money(sr.paid2)}.`);
@@ -244,7 +248,7 @@ VIEWS.me = () => {
   const take = num(p.amount);
   const nextSend = schedule().find(s => s.type === 'pay' && s.k === k && ['Scheduled', 'Ready to send'].includes(sendState(s)));
   const carryList = items().filter(it => it.name && myShare(it, k) > 0).map(it => ({ it, mo: (it.kind === 'bill' ? billMonthly(it.ref) : (debtActive(it.ref) ? num(it.ref.payment) : 0)) * myShare(it, k) })).filter(x => x.mo > 0).sort((a, b) => b.mo - a.mo);
-  const myDebts = state.debts.filter(d => d.name && myShare(itemById(d.id), k) > 0 && d.include !== 'No');
+  const myDebts = state.debts.filter(d => d.name && !d.pending && myShare(itemById(d.id), k) > 0 && d.include !== 'No');
   const periodCard = (start, idx) => {
     const end = periodEnd(k, start), list = periodItems(k, start, end), left = list.reduce((s, r) => s + r.left, 0);
     return `<div class="card"><div class="spread"><h2>${idx === 0 && start <= t ? 'This paycheck' : 'Next paycheck'} · ${dateShort(start)}</h2><span class="muted small">to ${dateShort(end)}</span></div>
@@ -298,6 +302,7 @@ VIEWS.activity = () => header('Activity', 'Every change, approval and import on 
 
 VIEWS.more = () => header('More', '') + `<div class="more-grid">
   <a href="#/me">My view<span>Per-paycheck lists</span></a><a href="#/pay">Payments<span>Log, approve, review</span></a>
+  <a href="#/misc">Misc costs<span>One-off and manual entries</span></a><a href="#/agree">Agreement<span>${state.changes.filter(c => c.status === 'Pending').length || 'No'} change${state.changes.filter(c => c.status === 'Pending').length === 1 ? '' : 's'} to sign</span></a>
   <a href="#/settle">Settle up<span>${esc(settleText(settleNow()))}</span></a><a href="#/notify">Reminders<span>Emails and calendar</span></a>
   <a href="#/debts">Debts<span>${money(totals().debt)}</span></a><a href="#/statements">Statements<span>Keep balances true</span></a>
   <a href="#/bills">Bills<span>${state.bills.length} bills</span></a><a href="#/actions">Actions<span>${totals().openActions} open</span></a>
@@ -332,6 +337,15 @@ function exportExtra(add, D, $) {
   add('Reminders', ['Send on', 'Reminder', 'To', 'Status'], schedule(62).map(s => [D(s.send), schedTitle(s), s.type === 'pay' ? S().emails[s.k] : [S().emails.p1, S().emails.p2].filter(Boolean).join(', '), sendState(s)]), [12, 44, 36, 14]);
   add('Activity', ['When', 'Who', 'What', 'Detail'], state.activity.map(a => [a.at.replace('T', ' ').slice(0, 16), who(a.who), a.what, a.detail]), [18, 10, 30, 40]);
   const b = state.bills.concat(state.debts);
+  add('Misc Costs', ['Date', 'Cost', 'Category', 'Carried by', 'Partner 1 share', 'Amount', 'Status', 'Paid by', 'Paid from', `${S().p1} approval`, `${S().p2} approval`, 'Counts', 'Notes'],
+    state.misc.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => { const ap = v => v === true ? 'Yes' : v === false ? 'No' : '';
+      return [D(x.date), x.desc, x.category, who(x.owner), x.share == null ? null : { t: 'n', v: num(x.share), z: '0%' }, $(x.amount), x.status, x.status === 'Paid' ? who(x.paidBy) : '', x.method, ap((x.approvals || {}).p1), ap((x.approvals || {}).p2), miscStatus(x), x.notes]; }),
+    [12, 30, 16, 10, 9, 12, 9, 10, 12, 10, 10, 16, 36]);
+  add('Agreement', ['Proposed', 'Change', 'Detail', 'Status', `${S().p1} signed`, `${S().p2} signed`, 'Took effect'],
+    state.changes.slice().reverse().map(c => [c.at.replace('T', ' ').slice(0, 16), changeTitle(c), changeLines(c).map(l => `${l.label}: ${l.from} to ${l.to}`).join('; '), c.status,
+      c.sig.p1 && c.sig.p1.at ? `${c.sig.p1.name} ${c.sig.p1.at.replace('T', ' ').slice(0, 16)}` : c.sig.p1 && c.sig.p1.declined ? 'Declined' : '',
+      c.sig.p2 && c.sig.p2.at ? `${c.sig.p2.name} ${c.sig.p2.at.replace('T', ' ').slice(0, 16)}` : c.sig.p2 && c.sig.p2.declined ? 'Declined' : '', c.closedAt ? c.closedAt.replace('T', ' ').slice(0, 16) : '']),
+    [17, 40, 60, 11, 26, 26, 17]);
   add('Portals', ['Item', 'Payment portal', 'Usually paid with', 'Account reference'], b.filter(x => x.portal || x.source || x.accountRef).map(x => [x.name, x.portal, srcLabel(state.sources.find(s => s.id === x.source)), x.accountRef]), [30, 40, 24, 16]);
 }
 function importExtra(J, g, out, h) {
@@ -342,6 +356,8 @@ function importExtra(J, g, out, h) {
   out.sources = J('Payment Methods').filter(r => r.Name).map(r => ({ id: uid(), name: h.str(r.Name), type: h.str(r.Type), last4: r['Last 4'] == null ? null : String(r['Last 4']).padStart(4, '0'), bank: h.str(r.Bank), owner: h.ownerKey(r['Belongs to']) || 'joint' }));
   for (const r of J('Portals')) { const it = h.byName(r.Item); if (!it) continue; it.portal = h.str(r['Payment portal']); it.accountRef = h.str(r['Account reference']); const src = out.sources.find(s => srcLabel(s) === r['Usually paid with']); it.source = src ? src.id : null; }
   out.statements = J('Statements').filter(r => r.Account).map(r => { const it = h.byName(r.Account); return { id: uid(), itemId: it ? it.id : null, date: h.dateV(r['Statement date']), balance: h.numV(r.Balance), minDue: h.numV(r['Minimum due']), dueDate: h.dateV(r['Due by']), update: h.str(r['Updated balance']) || 'Yes', link: h.str(r.Link), notes: h.str(r.Notes) }; });
+  out.misc = J('Misc Costs').filter(r => r.Cost).map(r => { const yn = v => v === 'Yes' ? true : v === 'No' ? false : null, a1 = yn(r[`${out.settings.p1} approval`]), a2 = yn(r[`${out.settings.p2} approval`]);
+    return { id: uid(), date: h.dateV(r.Date), desc: h.str(r.Cost), category: h.str(r.Category) || 'Other', owner: h.ownerKey(r['Carried by']) || 'shared', share: h.numV(r['Partner 1 share']), amount: h.numV(r.Amount), status: h.str(r.Status) || 'Paid', paidBy: h.ownerKey(r['Paid by']) || 'joint', method: h.str(r['Paid from']), notes: h.str(r.Notes), approvals: Object.assign({}, a1 != null && { p1: a1 }, a2 != null && { p2: a2 }) }; });
   out.activity = J('Activity').filter(r => r.What).map(r => ({ at: new Date(String(r.When).replace(' ', 'T')).toISOString(), who: h.ownerKey(r.Who) || '', what: h.str(r.What), detail: h.str(r.Detail) || '' }));
 }
 
@@ -360,7 +376,6 @@ document.addEventListener('click', e => {
     case 'ics': { const k = a.dataset.v; download(new Blob([icsFor(k)], { type: 'text/calendar' }), `household-hub-${S()[k].toLowerCase().replace(/\W+/g, '-')}.ics`); logAct('Downloaded calendar', S()[k]); save(); return toast('Calendar file downloaded. Open it to add the reminders.'); }
     case 'portal': {
       const it = itemById(a.dataset.id), m = a.dataset.month || thisMonth(), src = state.sources.find(s => s.id === it.ref.source);
-      window.open(it.ref.portal, '_blank', 'noopener');
       const left = Math.max(0, it.due(m) - paidFor(it.id, m));
       const method = src ? ({ 'Debit card': 'Checking', Checking: 'Checking', Savings: 'Savings', 'Credit card': 'Credit card' })[src.type] || 'Other' : null;
       return openForm('payment', null, { itemId: it.id, amount: left || it.amount, date: m === thisMonth() ? todayISO() : dayOf(m, it.day || 1), paidBy: it.owner === 'shared' ? (S().me || 'joint') : it.owner, kind: 'Scheduled', method, notes: src ? `Paid online with ${srcLabel(src)}` : 'Paid online' });
@@ -380,4 +395,4 @@ document.addEventListener('change', e => {
 
 /* ---------- boot ---------- */
 Object.assign(window.hub, { paydays, paycheckEmail, monthEndEmail, schedule, icsFor });
-go();
+// boot happens at the end of agree.js
